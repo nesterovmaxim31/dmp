@@ -73,13 +73,18 @@ static int dmp_map(struct dm_target *ti, struct bio *bio) {
     switch(bio_op(bio)) {
     case REQ_OP_READ: /* In case of writing */
         spin_lock(&dmp->spinlock);
-
+        dmp->read_requests++;
+        dmp->read_size += bio->bi_iter.bi_size;
         spin_unlock(&dmp->spinlock);
         break;
+        
     case REQ_OP_WRITE: /* In case of reading */
         spin_lock(&dmp->spinlock);
-
+        dmp->write_requests++;
+        dmp->writen_size += bio->bi_iter.bi_size;        
         spin_unlock(&dmp->spinlock);        
+        break;
+    default:
         break;
     }
 
