@@ -21,10 +21,10 @@ static struct device_mapper_proxy {
 
     spinlock_t spinlock; /* Spinlock to synchronize changing in struct */
 
-    struct kobject *kobj_dmp;
+    struct kobject *kobj_dmp; /* Sysfs kobject */
 } dmp;
 
-/* Sysfs */
+/* Sysfs function to fill volumes file */
 static ssize_t  sysfs_show(struct kobject *kobj, 
                            struct kobj_attribute *attr, char *buf) {
     ull dmp_read_requests, dmp_write_requests, dmp_avg_size_writen, \
@@ -43,8 +43,8 @@ static ssize_t  sysfs_show(struct kobject *kobj,
          (dmp_write_requests + dmp_read_requests) : 1);
     spin_unlock(&dmp.spinlock);
     
-    return sprintf(buf, "read:\n\treqs: %llu\navg size: %llu\n \
-write:\n\treqs: %llu\n\tavg size: %llu\ntotal:\nreqs: %llu\n\tavg size: \
+    return sprintf(buf, "read:\n\treqs: %llu\n\tavg size: %llu\n \
+write:\n\treqs: %llu\n\tavg size: %llu\ntotal:\n\treqs: %llu\n\tavg size: \
 %llu\n", dmp_read_requests, dmp_avg_size_read, dmp_write_requests, \
                    dmp_avg_size_writen, dmp_rw_requests, dmp_avg_size_rw);
 }
@@ -54,7 +54,6 @@ struct kobj_attribute dmp_attr = __ATTR(volumes, 0660, sysfs_show, \
 
 /* Constructor */
 static int dmp_ctr(struct dm_target *ti, unsigned int argc, char **argv) {
-    printk("\n Constructor is started \n");
     int _result;
 
     /* One argument is required - underlying block device name */
@@ -70,7 +69,6 @@ static int dmp_ctr(struct dm_target *ti, unsigned int argc, char **argv) {
 
     }
 
-    printk("\n Device is ready \n");
     /* Set default values */
     dmp.write_requests = 0;
     dmp.read_requests = 0;
@@ -80,21 +78,17 @@ static int dmp_ctr(struct dm_target *ti, unsigned int argc, char **argv) {
     /* Init spinlock */
     spin_lock_init(&dmp.spinlock);
 
-    printk("\n Constructor is finished \n");
     return 0;
 }
 
 /* Destructor*/
 static int dmp_map(struct dm_target *ti, struct bio *bio) {
-    printk("Map is started \n");
-
     switch(bio_op(bio)) {
     case REQ_OP_READ: /* In case of writing */
         spin_lock(&dmp.spinlock);
         dmp.read_requests++;
         dmp.read_size += bio->bi_iter.bi_size;
         spin_unlock(&dmp.spinlock);
-        printk("Reading is finished\n");
         break;
         
     case REQ_OP_WRITE: /* In case of reading */
@@ -102,7 +96,6 @@ static int dmp_map(struct dm_target *ti, struct bio *bio) {
         dmp.write_requests++;
         dmp.writen_size += bio->bi_iter.bi_size;
         spin_unlock(&dmp.spinlock);
-        printk("Writing is finished\n");
         break;
     default:
 		return DM_MAPIO_KILL;
@@ -112,8 +105,6 @@ static int dmp_map(struct dm_target *ti, struct bio *bio) {
     /* Change block device target for bio and redirect */
     bio_set_dev(bio, dmp.device_mapper_proxy_dev->bdev);
     submit_bio(bio);
-    printk("Redirect is finished %llu %llu\n", dmp.read_requests, \
-           dmp.write_requests);
     
     return DM_MAPIO_SUBMITTED;
 }
@@ -134,31 +125,33 @@ static struct target_type dmp_target = {
 };
 
 static int __init init_dmp(void) {
-  int result;
-  result = dm_register_target(&dmp_target);
+    int result;
+    result = dm_register_target(&dmp_target);
   
-  if(result < 0)
-      printk(KERN_CRIT "\n Error in registering target \n");
-  else
-      printk("\n Device is registered \n");
+    if(result < 0)
+        printk(KERN_CRIT "Error in registering target\n");
+    else
+        printk("Device is registered\n");
 
-  /* Sysfs */
-  /* Create direcotry stat */
-  dmp.kobj_dmp = kobject_create_and_add("stat", &THIS_MODULE->mkobj.kobj);
-  if (dmp.kobj_dmp == NULL) {
-      return -ENOMEM;
-  }
+    /* Sysfs */
+    /* Create direcotry stat */
+    dmp.kobj_dmp = kobject_create_and_add("stat", &THIS_MODULE->mkobj.kobj);
+    if (dmp.kobj_dmp == NULL) {
+        return -ENOMEM;
+    }
 
-  result = sysfs_create_file(dmp.kobj_dmp, &dmp_attr.attr);
-  if (result) {
-      printk(KERN_CRIT "\n Error in registering sysfs \n");
-  }
+    /* Create file volumes */
+    result = sysfs_create_file(dmp.kobj_dmp, &dmp_attr.attr);
+    if (result) {
+        printk(KERN_CRIT "Error in sysfs initialization\n");
+    }
   
-  return result;
+    return result;
 }
 
 static void __exit exit_dmp(void) {
-  dm_unregister_target(&dmp_target);
+    /* Unregister device */
+    dm_unregister_target(&dmp_target);    
 }
 
 module_init(init_dmp);
