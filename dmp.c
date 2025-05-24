@@ -4,7 +4,7 @@
 #include <linux/bio.h>
 #include <linux/device-mapper.h>
 #include <linux/spinlock.h>
-
+#include <linux/sysfs.h>
 
 #define DM_MSG_PREFIX "dmp"
 
@@ -19,8 +19,38 @@ static struct device_mapper_proxy {
     ull writen_size;    /* Sum of all written blocks's size */
     ull read_size;      /* Sum of all read blocks's size */
 
-    spinlock_t spinlock; /* Spinlock to synchronize changing in struct */ 
+    spinlock_t spinlock; /* Spinlock to synchronize changing in struct */
+
+    struct kobject *kobj_dmp;
 } dmp;
+
+/* Sysfs */
+static ssize_t  sysfs_show(struct kobject *kobj, 
+                           struct kobj_attribute *attr, char *buf) {
+    ull dmp_read_requests, dmp_write_requests, dmp_avg_size_writen, \
+        dmp_avg_size_read, dmp_rw_requests, dmp_avg_size_rw;
+    
+    spin_lock(&dmp.spinlock);
+    dmp_read_requests = dmp.read_requests;
+    dmp_write_requests = dmp.write_requests;
+    dmp_avg_size_read = dmp.read_size / (dmp_read_requests != 0 ? \
+                                         dmp_read_requests : 1);
+    dmp_avg_size_writen = dmp.writen_size / (dmp_write_requests != 0 ? \
+                                             dmp_write_requests : 1);
+    dmp_rw_requests = dmp_write_requests + dmp_read_requests;
+    dmp_avg_size_rw = (dmp.writen_size + dmp.read_size) / \
+        ((dmp_write_requests + dmp_read_requests) != 0 ? \
+         (dmp_write_requests + dmp_read_requests) : 1);
+    spin_unlock(&dmp.spinlock);
+    
+    return sprintf(buf, "read:\n\treqs: %llu\navg size: %llu\n \
+write:\n\treqs: %llu\n\tavg size: %llu\ntotal:\nreqs: %llu\n\tavg size: \
+%llu\n", dmp_read_requests, dmp_avg_size_read, dmp_write_requests, \
+                   dmp_avg_size_writen, dmp_rw_requests, dmp_avg_size_rw);
+}
+        
+struct kobj_attribute dmp_attr = __ATTR(volumes, 0660, sysfs_show, \
+                                        NULL);
 
 /* Constructor */
 static int dmp_ctr(struct dm_target *ti, unsigned int argc, char **argv) {
@@ -70,7 +100,7 @@ static int dmp_map(struct dm_target *ti, struct bio *bio) {
     case REQ_OP_WRITE: /* In case of reading */
         spin_lock(&dmp.spinlock);
         dmp.write_requests++;
-        dmp.writen_size += bio->bi_iter.bi_size;        
+        dmp.writen_size += bio->bi_iter.bi_size;
         spin_unlock(&dmp.spinlock);
         printk("Writing is finished\n");
         break;
@@ -82,7 +112,8 @@ static int dmp_map(struct dm_target *ti, struct bio *bio) {
     /* Change block device target for bio and redirect */
     bio_set_dev(bio, dmp.device_mapper_proxy_dev->bdev);
     submit_bio(bio);
-    printk("Redirect is finished\n");
+    printk("Redirect is finished %llu %llu\n", dmp.read_requests, \
+           dmp.write_requests);
     
     return DM_MAPIO_SUBMITTED;
 }
@@ -92,7 +123,6 @@ static void dmp_dtr(struct dm_target *ti) {
     printk("\n Destructor is started \n");
     kfree(ti->private);
 }
-
 
 static struct target_type dmp_target = {
 	.name   = "dmp",
@@ -111,6 +141,18 @@ static int __init init_dmp(void) {
       printk(KERN_CRIT "\n Error in registering target \n");
   else
       printk("\n Device is registered \n");
+
+  /* Sysfs */
+  /* Create direcotry stat */
+  dmp.kobj_dmp = kobject_create_and_add("stat", &THIS_MODULE->mkobj.kobj);
+  if (dmp.kobj_dmp == NULL) {
+      return -ENOMEM;
+  }
+
+  result = sysfs_create_file(dmp.kobj_dmp, &dmp_attr.attr);
+  if (result) {
+      printk(KERN_CRIT "\n Error in registering sysfs \n");
+  }
   
   return result;
 }
