@@ -3,9 +3,11 @@
 #include <linux/init.h>
 #include <linux/bio.h>
 #include <linux/device-mapper.h>
+#include <linux/spinlock.h>
 
 
 #define DM_MSG_PREFIX "dmp"
+DEFINE_SPINLOCK(lock1);
 
 typedef unsigned long long ull;
 
@@ -17,6 +19,8 @@ struct device_mapper_proxy {
     ull read_requests;  /* Amount of read bio */ 
     ull writen_size;    /* Sum of all written blocks's size */
     ull read_size;      /* Sum of all read blocks's size */
+
+    spinlock_t spinlock; /* Spinlock to synchronize changing in struct */ 
 };
 
 /* Constructor */
@@ -53,6 +57,8 @@ static int dmp_ctr(struct dm_target *ti, unsigned int argc, char **argv) {
     dmp->writen_size = 0;
     dmp->read_size = 0;
     
+    spin_lock_init(&dmp->spinlock);
+    
     ti->private = dmp;
     
     return 0;
@@ -61,15 +67,25 @@ static int dmp_ctr(struct dm_target *ti, unsigned int argc, char **argv) {
 /* Destructor*/
 static int dmp_map(struct dm_target *ti, struct bio *bio) {
     printk("\n Map is started \n");
+    struct device_mapper_proxy *dmp = \
+        (struct device_mapper_proxy *) ti->private;
 
     switch(bio_op(bio)) {
     case REQ_OP_READ: /* In case of writing */
-        
+        spin_lock(&dmp->spinlock);
+
+        spin_unlock(&dmp->spinlock);
         break;
     case REQ_OP_WRITE: /* In case of reading */
-        
+        spin_lock(&dmp->spinlock);
+
+        spin_unlock(&dmp->spinlock);        
         break;
     }
+
+    /* Change block device target for bio and redirect */
+    bio->bi_bdev = dmp->device_mapper_proxy_dev->bdev;
+    submit_bio(bio);
     
     return DM_MAPIO_SUBMITTED;
 }
